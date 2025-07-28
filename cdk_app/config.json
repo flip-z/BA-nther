@@ -1,0 +1,7 @@
+{
+  "panther_api_url": "your api endpoint",
+  "panther_api_token": "your panther api token",
+  "training_schedule": "cron(0 6 * * ? *)",
+  "aws_region": "your aws region",
+  "environment": "dev"
+}

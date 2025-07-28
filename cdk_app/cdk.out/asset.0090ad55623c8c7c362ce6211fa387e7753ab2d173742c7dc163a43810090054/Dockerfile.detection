@@ -1,0 +1,20 @@
+FROM --platform=linux/amd64 public.ecr.aws/lambda/python:3.11
+
+# Install system dependencies for building packages
+RUN yum update -y && \
+    yum install -y gcc gcc-c++ make && \
+    yum clean all
+
+# Upgrade pip to latest version
+RUN pip install --upgrade pip
+
+# Copy requirements and install dependencies
+COPY requirements.txt ${LAMBDA_TASK_ROOT}
+RUN pip install -r requirements.txt --target "${LAMBDA_TASK_ROOT}"
+
+# Copy function code
+COPY detection_handler.py ${LAMBDA_TASK_ROOT}
+
+# Set the CMD to your handler
+# Use the Lambda runtime interface
+CMD [ "detection_handler.detect" ] 
