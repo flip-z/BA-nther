@@ -1,0 +1,20 @@
+{
+  "storage": "local",
+  "queries": [
+    {
+      "title": "AWS Config",
+      "time": 30,
+      "query": "select * exclude (p_source_file, p_any_trace_ids, p_any_actor_ids, p_any_aws_account_ids, p_any_aws_arns, p_any_domain_names, p_any_usernames, p_source_id, p_source_label, p_row_id, p_schema_version, p_udm, p_log_type, p_parse_time, p_any_ip_addresses) from panther_logs.public.aws_cloudtrail where p_occurs_since('{time}d') and eventSource = 'config.amazonaws.com'"
+    },
+    {
+      "title": "AWS IAM",
+      "time": 30,
+      "query": "select * exclude (p_source_file, p_any_trace_ids, p_any_actor_ids, p_any_aws_account_ids, p_any_aws_arns, p_any_domain_names, p_any_usernames, p_source_id, p_source_label, p_row_id, p_schema_version, p_udm, p_log_type, p_parse_time, p_any_ip_addresses) from panther_logs.public.aws_cloudtrail where p_occurs_since('{time}d') and eventSource = 'iam.amazonaws.com'"
+    },
+    {
+      "title": "AWS VPC Flow",
+      "time": 14,
+      "query": "select * exclude (p_source_file,p_any_ip_addresses,p_any_aws_account_ids,p_any_aws_instance_ids,p_log_type,p_parse_time,p_row_id,p_udm) from panther_logs.public.aws_vpcflow where p_occurs_since('{time}d')"
+    }
+  ]
+}

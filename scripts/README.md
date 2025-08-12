@@ -46,9 +46,9 @@ PANTHER_API_URL=https://your-company.panther.com/public/graphql
 {
   "queries": [
     {
-      "title": "AWS Config",
+      "title": "security_logs",
       "time": 30,
-      "query": "select * exclude (p_source_file, p_any_trace_ids, ...) from panther_logs.public.aws_cloudtrail where p_occurs_since('{time}d') and eventSource = 'config.amazonaws.com'"
+      "query": "SELECT * FROM panther_logs.public.aws_cloudtrail WHERE p_event_time >= now() - interval '{days} days'"
     }
   ]
 }
@@ -57,24 +57,22 @@ PANTHER_API_URL=https://your-company.panther.com/public/graphql
 Each query needs:
 - `title`: Name for the dataset (used as filename)
 - `time`: Number of days to look back for data
-- `query`: SQL query to execute (use `{time}d` placeholder)
+- `query`: SQL query to execute (use `{days}` placeholder)
 
 ## Usage
 
-### Shell Script (Recommended)
+### Docker Compose (Recommended)
 
 Run the complete pipeline:
 ```bash
 cd scripts
-./run_pipeline.sh
-```
-
-### Docker Compose
-
-```bash
-cd scripts
 docker-compose up --build
 ```
+
+This will:
+1. Collect security logs from Panther API
+2. Train anomaly detection models
+3. Start the anomaly detector service
 
 ### Individual Scripts
 
@@ -97,14 +95,14 @@ python model_trainer.py
 cd scripts/anomaly_detector
 pip install -r requirements.txt
 
+# Analyze event from JSON string
+python anomaly_detector.py --event '{"timestamp": "2024-01-01T12:00:00Z", "source": "app", ...}'
+
 # Analyze event from file
 python anomaly_detector.py --file event.json
 
 # Analyze event from stdin
-echo '{"eventName": "test", "eventSource": "iam.amazonaws.com"}' | python anomaly_detector.py
-
-# Set custom anomaly threshold
-python anomaly_detector.py --file event.json --anomaly-threshold -0.5
+echo '{"timestamp": "2024-01-01T12:00:00Z", ...}' | python anomaly_detector.py
 ```
 
 ## Output
@@ -131,8 +129,8 @@ Returns JSON with:
 ### Queries (`config/config.json`)
 Simple configuration with three fields per query:
 - `title`: Dataset name (becomes filename)
-- `time`: Days to look back for training data  
-- `query`: SQL query with `{time}d` placeholder for temporal filtering
+- `time`: Days to look back for training data
+- `query`: SQL query with `{days}` placeholder
 
 ### Model Parameters (Hard-coded)
 - Isolation Forest contamination rate: 0.1 (10% anomalies expected)
@@ -163,8 +161,8 @@ scripts/
 ├── config/                  # Configuration files
 │   ├── config.json
 │   └── .env.example
-├── data/                    # Collected security logs (gitignored)
-├── models/                  # Trained models and metadata (gitignored)
+├── data/                    # Collected security logs
+├── models/                  # Trained models and metadata
 └── docker-compose.yml       # Container orchestration
 ```
 

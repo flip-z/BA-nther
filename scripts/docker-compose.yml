@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  data-collector:
+    build:
+      context: ./data_collector
+      dockerfile: Dockerfile
+    environment:
+      - PANTHER_API_TOKEN=${PANTHER_API_TOKEN}
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+      - ./shared:/app/shared:ro
+    networks:
+      - panther-anomaly
+
+  model-trainer:
+    build:
+      context: ./model_trainer
+      dockerfile: Dockerfile
+    depends_on:
+      - data-collector
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data:ro
+      - ./models:/app/models
+      - ./shared:/app/shared:ro
+    networks:
+      - panther-anomaly
+
+  anomaly-detector:
+    build:
+      context: ./anomaly_detector
+      dockerfile: Dockerfile
+    depends_on:
+      - model-trainer
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro
+      - ./shared:/app/shared:ro
+    networks:
+      - panther-anomaly
+    stdin_open: true
+    tty: true
+
+networks:
+  panther-anomaly:
+    driver: bridge
+
+volumes:
+  data:
+  models:

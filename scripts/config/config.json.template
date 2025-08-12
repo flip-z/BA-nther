@@ -1,0 +1,20 @@
+{
+  "storage": "local",
+  "queries": [
+    {
+      "title": "security_logs",
+      "time": 30,
+      "query": "SELECT * FROM panther_logs.public.aws_cloudtrail WHERE p_occurs_since('{time}d')"
+    },
+    {
+      "title": "alert_logs",
+      "time": 7,
+      "query": "SELECT * FROM panther_rule_matches.public.alerts WHERE p_occurs_since('{time}d')"
+    },
+    {
+      "title": "audit_logs",
+      "time": 14,
+      "query": "SELECT * FROM panther_audit_logs.public.audit WHERE p_occurs_since('{time}d')"
+    }
+  ]
+}
