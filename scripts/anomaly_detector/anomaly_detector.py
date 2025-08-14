@@ -22,9 +22,10 @@ from utils import (
     setup_logging, load_config, load_json, 
     flatten_json, extract_time_features
 )
+from feature_selection import analyze_feature_quality
 
 class SecurityAnomalyDetector:
-    def __init__(self, models_dir: str, anomaly_threshold: float = -0.3):
+    def __init__(self, models_dir: str, anomaly_threshold: float = -0.2):
         self.logger = setup_logging("SecurityAnomalyDetector", "INFO")
         self.models_dir = Path(models_dir)
         self.anomaly_threshold = anomaly_threshold
@@ -92,8 +93,7 @@ class SecurityAnomalyDetector:
             # Map AWS service sources to model names
             service_to_model = {
                 'iam.amazonaws.com': 'AWS IAM',
-                'config.amazonaws.com': 'AWS Config', 
-                'ec2.amazonaws.com': 'AWS VPC Flow',
+                'config.amazonaws.com': 'AWS Config',
                 'vpc-flow-logs.amazonaws.com': 'AWS VPC Flow'
             }
             
@@ -112,8 +112,8 @@ class SecurityAnomalyDetector:
             if 'audit_logs' in available_types:
                 return 'audit_logs'
         
-        # Default to first available model
-        return available_types[0]
+        # No suitable model found - return None to indicate unsupported log type
+        return None
 
     def preprocess_event(self, event: Dict[str, Any], log_type: str) -> pd.DataFrame:
         """Preprocess a single event for anomaly detection"""
@@ -228,8 +228,8 @@ class SecurityAnomalyDetector:
         
         return normalized
 
-    def analyze_feature_quality(self, log_type: str, target_features: int = 10) -> List[str]:
-        """Analyze and select optimal features based on coverage, cardinality, and information content"""
+    def analyze_feature_quality(self, log_type: str, target_features: int = 7) -> List[str]:
+        """Analyze and select optimal features using shared feature selection logic"""
         if log_type not in self.metadata:
             return []
         
@@ -237,90 +237,15 @@ class SecurityAnomalyDetector:
         feature_stats = metadata.get('feature_stats', {})
         training_samples = metadata.get('training_samples', 1)
         
-        feature_scores = []
-        
-        for feature, stats in feature_stats.items():
-            # Skip is_business_hours entirely - we don't want to use it
-            if feature == 'is_business_hours':
-                continue
-                
-            # Calculate coverage (how often this feature appears)
-            if stats['type'] == 'categorical':
-                total_feature_samples = sum(stats['value_counts'].values()) if 'value_counts' in stats else 0
-            else:
-                # For numerical features, assume they're always present if in stats
-                total_feature_samples = training_samples
-            
-            coverage = total_feature_samples / training_samples if training_samples > 0 else 0
-            
-            # Skip very sparse features
-            if coverage < 0.7:
-                continue
-                
-            # Calculate cardinality
-            if stats['type'] == 'categorical':
-                cardinality = stats.get('unique_count', len(stats.get('value_counts', {})))
-            else:
-                # For numerical features, use a reasonable estimate
-                cardinality = min(1000, training_samples // 10)
-            
-            # Skip constant features or extremely high cardinality
-            if cardinality < 2 or cardinality > 1000:
-                continue
-            
-            # Calculate information content (entropy-like measure)
-            if stats['type'] == 'categorical':
-                value_counts = stats.get('value_counts', {})
-                total = sum(value_counts.values())
-                if total > 0:
-                    # Calculate normalized entropy (0 = all same value, 1 = uniform distribution)
-                    entropy = -sum((count/total) * np.log2(count/total) for count in value_counts.values() if count > 0)
-                    max_entropy = np.log2(len(value_counts)) if len(value_counts) > 1 else 1
-                    normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0
-                else:
-                    normalized_entropy = 0
-            else:
-                # For numerical features, assume reasonable entropy
-                normalized_entropy = 0.7
-            
-            # Score feature (higher is better)
-            # Prefer good coverage, moderate cardinality, high information content
-            cardinality_score = min(1.0, cardinality / 100)  # Sweet spot around 10-100 unique values
-            if cardinality > 100:
-                cardinality_score = max(0.1, 1.0 - (cardinality - 100) / 900)  # Penalize very high cardinality
-            
-            score = (coverage * 0.4) + (cardinality_score * 0.3) + (normalized_entropy * 0.3)
-            
-            feature_scores.append((feature, score, coverage, cardinality, normalized_entropy))
-        
-        # Sort by score 
-        feature_scores.sort(key=lambda x: x[1], reverse=True)
-        
-        # Remove redundant features
-        deduped_features = []
-        for feature, score, coverage, cardinality, entropy in feature_scores:
-            # Skip redundant temporal features
-            if feature == 'hour_of_day' and any(f[0] == 'hour' for f in deduped_features):
-                continue  # hour_of_day is identical to hour
-            if feature == 'is_business_hours':
-                # Skip is_business_hours if we already have hour OR day_of_week (it's derivable)
-                has_hour = any(f[0] == 'hour' for f in deduped_features)
-                has_day_of_week = any(f[0] == 'day_of_week' for f in deduped_features)
-                if has_hour or has_day_of_week:
-                    continue
-            
-            deduped_features.append((feature, score, coverage, cardinality, entropy))
-            
-            if len(deduped_features) >= target_features:
-                break
-        
-        selected_features = [f[0] for f in deduped_features]
-        
-        self.logger.debug(f"Feature selection for {log_type}:")
-        for feature, score, coverage, cardinality, entropy in deduped_features:
-            self.logger.debug(f"  {feature}: score={score:.3f} coverage={coverage:.2f} cardinality={cardinality} entropy={entropy:.3f}")
-        
-        return selected_features
+        # Use shared feature selection utility (same as training)
+        from feature_selection import analyze_feature_quality as shared_analyze_feature_quality
+        return shared_analyze_feature_quality(
+            feature_stats=feature_stats,
+            training_samples=training_samples,
+            target_features=target_features,  # Changed default from 10 to 7
+            min_coverage=0.7,  # 70% coverage threshold
+            logger=self.logger
+        )
 
     def calculate_feature_deviations(self, event: Dict[str, Any], log_type: str) -> Dict[str, Dict[str, Any]]:
         """Calculate how much each feature deviates from normal patterns - only for optimal features"""
@@ -543,13 +468,156 @@ class SecurityAnomalyDetector:
                 "log_type": log_type
             }
 
+# Global detector instance for Lambda reuse
+_detector = None
+
+def get_detector():
+    """Get or initialize the global detector instance"""
+    global _detector
+    if _detector is None:
+        # Try multiple possible model locations
+        possible_paths = [
+            Path(__file__).parent / "models",  # Container path
+            Path(__file__).parent.parent / "models",  # Local development path
+            Path(os.getenv("MODELS_DIR", "/tmp")) if os.getenv("MODELS_DIR") else None  # Environment override
+        ]
+        
+        models_dir = None
+        for path in possible_paths:
+            if path and path.exists() and any(path.glob("*_isolation_forest.joblib")):
+                models_dir = path
+                break
+        
+        if models_dir is None:
+            raise FileNotFoundError(
+                f"Models directory not found. Searched paths: {[str(p) for p in possible_paths if p]}. "
+                f"Please ensure models are trained and available, or set MODELS_DIR environment variable."
+            )
+        
+        _detector = SecurityAnomalyDetector(str(models_dir))
+    return _detector
+
+def lambda_handler(event, context):
+    """
+    AWS Lambda handler for anomaly detection
+    
+    Expected event format (direct Lambda invoke):
+    {
+        "event_data": { /* security log event */ },
+        "log_type": "AWS IAM",  # optional
+        "anomaly_threshold": -0.3  # optional
+    }
+    
+    Expected event format (API Gateway):
+    {
+        "body": "{\"event_data\": {/* security log event */}, \"log_type\": \"AWS IAM\"}",
+        "isBase64Encoded": false,
+        ...
+    }
+    
+    Returns:
+    {
+        "is_anomaly": true/false,
+        "anomaly_score": float,
+        "log_type": string,
+        "explanation": string,
+        "feature_deviations": {...},
+        "model_info": {...}
+    }
+    """
+    try:
+        # Handle API Gateway event format
+        if 'body' in event:
+            # This is an API Gateway event
+            try:
+                if event.get('isBase64Encoded', False):
+                    import base64
+                    body = base64.b64decode(event['body']).decode('utf-8')
+                else:
+                    body = event['body']
+                
+                request_data = json.loads(body)
+            except json.JSONDecodeError as e:
+                return {
+                    "statusCode": 400,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps({"error": f"Invalid JSON in request body: {str(e)}"})
+                }
+        else:
+            # Direct Lambda invocation
+            request_data = event
+        
+        # Extract parameters from request data
+        if 'event_data' not in request_data:
+            error_response = {
+                "error": "Missing 'event_data' in request",
+                "statusCode": 400
+            }
+            
+            # Return API Gateway format if this was an API Gateway call
+            if 'body' in event:
+                return {
+                    "statusCode": 400,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps(error_response)
+                }
+            else:
+                return error_response
+        
+        event_data = request_data['event_data']
+        log_type = request_data.get('log_type', None)
+        anomaly_threshold = request_data.get('anomaly_threshold', -0.2)
+        
+        # Get detector instance (reused across Lambda invocations)
+        detector = get_detector()
+        
+        # Update threshold if provided
+        if anomaly_threshold != detector.anomaly_threshold:
+            detector.anomaly_threshold = anomaly_threshold
+        
+        # Detect anomaly
+        result = detector.detect_anomaly(event_data, log_type)
+        
+        # Add success status
+        result['statusCode'] = 200
+        
+        # Return appropriate format based on invocation type
+        if 'body' in event:
+            # API Gateway response format
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps(result)
+            }
+        else:
+            # Direct Lambda invocation
+            return result
+        
+    except Exception as e:
+        error_response = {
+            "error": str(e),
+            "statusCode": 500
+        }
+        
+        # Return appropriate format based on invocation type
+        if 'body' in event:
+            # API Gateway response format
+            return {
+                "statusCode": 500,
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps(error_response)
+            }
+        else:
+            # Direct Lambda invocation
+            return error_response
+
 def main():
     parser = argparse.ArgumentParser(description="Security Log Anomaly Detector")
     parser.add_argument("--event", type=str, help="JSON string of event to analyze")
     parser.add_argument("--file", type=str, help="Path to JSON file containing event")
     parser.add_argument("--log-type", type=str, help="Specify log type (optional)")
     parser.add_argument("--models-dir", type=str, help="Path to models directory")
-    parser.add_argument("--anomaly-threshold", type=float, default=-0.3, help="Anomaly score threshold for classification (default: -0.3)")
+    parser.add_argument("--anomaly-threshold", type=float, default=-0.2, help="Anomaly score threshold for classification (default: -0.2)")
     
     args = parser.parse_args()
     

@@ -24,6 +24,7 @@ from utils import (
     flatten_json, extract_time_features, get_categorical_features, 
     get_numerical_features, calculate_feature_stats, ensure_directory
 )
+from feature_selection import select_features_for_training
 
 class SecurityLogModelTrainer:
     def __init__(self, config_path: str):
@@ -86,7 +87,7 @@ class SecurityLogModelTrainer:
         return df
 
     def select_features(self, df: pd.DataFrame, log_type: str) -> Tuple[List[str], List[str], pd.DataFrame]:
-        """Select optimal features for anomaly detection"""
+        """Select optimal features for anomaly detection using sophisticated coverage + entropy analysis"""
         self.logger.info(f"Selecting features for {log_type}")
         
         # Filter out Panther-specific fields except p_event_time before feature selection
@@ -95,49 +96,46 @@ class SecurityLogModelTrainer:
         
         self.logger.info(f"Filtered out {len(df.columns) - len(filtered_columns)} Panther p_ fields (kept p_event_time)")
         
-        # Get categorical and numerical features from filtered data
-        categorical_features = get_categorical_features(df_filtered, max_cardinality=50)
-        numerical_features = get_numerical_features(df_filtered)
+        # Get all potential categorical and numerical features
+        all_categorical = get_categorical_features(df_filtered, max_cardinality=1000)  # Higher limit for initial pool
+        all_numerical = get_numerical_features(df_filtered)
         
-        # Security-specific feature selection
-        security_categorical = []
-        security_numerical = []
+        # Calculate feature statistics needed for sophisticated selection
+        all_features = all_categorical + all_numerical
+        feature_stats = calculate_feature_stats(df_filtered, all_features)
         
-        # Prioritize CloudTrail-specific categorical features
-        priority_categorical = [
-            'eventname', 'eventsource', 'eventtype', 'eventcategory', 'awsregion',
-            'sourceipaddress', 'useragent', 'useridentity.type', 'useridentity.arn',
-            'useridentity.accountid', 'useridentity.principalid', 'useridentity.username',
-            'recipientaccountid', 'requestid', 'errorcode', 'errormessage'
-        ]
+        # Use sophisticated feature selection with fallback thresholds
+        thresholds_to_try = [0.6, 0.5, 0.3, 0.1]  # 60%, 50%, 30%, 10%
+        selected_categorical, selected_numerical = [], []
         
-        for feature in categorical_features:
-            feature_lower = feature.lower()
-            if any(priority in feature_lower for priority in priority_categorical):
-                security_categorical.append(feature)
-            elif df_filtered[feature].nunique() <= 20:  # Low cardinality
-                security_categorical.append(feature)
+        for threshold in thresholds_to_try:
+            self.logger.info(f"Trying coverage threshold: {threshold}")
+            selected_categorical, selected_numerical = select_features_for_training(
+                categorical_features=all_categorical,
+                numerical_features=all_numerical,
+                feature_stats=feature_stats,
+                training_samples=len(df_filtered),
+                target_features=10,  # Enhanced for MVP temporal discrimination
+                min_coverage=threshold,
+                logger=self.logger
+            )
+            
+            # If we got some features, break
+            if len(selected_categorical) + len(selected_numerical) > 0:
+                self.logger.info(f"Successfully selected features with {threshold*100}% coverage threshold")
+                break
         
-        # Prioritize CloudTrail-relevant numerical features
-        priority_numerical = [
-            'hour', 'hour_of_day', 'day_of_week', 'day_of_month', 'month',
-            'responsecode', 'requestparameters', 'responseelements', 'resources'
-        ]
+        # If still no features, log error but continue with empty lists to get better error message
+        if len(selected_categorical) + len(selected_numerical) == 0:
+            self.logger.error(f"No features selected even with lowest threshold! This indicates a data problem.")
         
-        for feature in numerical_features:
-            feature_lower = feature.lower()
-            if any(priority in feature_lower for priority in priority_numerical):
-                security_numerical.append(feature)
-            elif feature in ['hour', 'hour_of_day', 'day_of_week', 'day_of_month', 'month']:
-                security_numerical.append(feature)  # Time features are always valuable
+        self.logger.info(f"Selected {len(selected_categorical)} categorical and {len(selected_numerical)} numerical features")
         
-        # Limit total features to prevent overfitting
-        security_categorical = security_categorical[:15]
-        security_numerical = security_numerical[:15]
+        # Create dataset with selected features only
+        selected_columns = selected_categorical + selected_numerical
+        df_selected = df_filtered[selected_columns].copy()
         
-        self.logger.info(f"Selected {len(security_categorical)} categorical and {len(security_numerical)} numerical features")
-        
-        return security_categorical, security_numerical, df_filtered
+        return selected_categorical, selected_numerical, df_selected
 
     def preprocess_features(self, df: pd.DataFrame, categorical_features: List[str], 
                            numerical_features: List[str], log_type: str, is_training: bool = True) -> pd.DataFrame:

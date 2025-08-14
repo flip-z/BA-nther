@@ -57,3 +57,8 @@ build/
 # Data and model artifacts
 data/
 models/
+
+# Test artifacts  
+response.json
+test_payload.json
+*_test.json

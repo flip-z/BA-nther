@@ -1,32 +1,20 @@
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+FROM public.ecr.aws/lambda/python:3.11-x86_64
 
 # Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY anomaly_detector/requirements.txt ${LAMBDA_TASK_ROOT}
+RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt
 
 # Copy shared utilities
-COPY ../shared ./shared
+COPY shared ${LAMBDA_TASK_ROOT}/shared
 
 # Copy application code
-COPY anomaly_detector.py .
+COPY anomaly_detector/anomaly_detector.py ${LAMBDA_TASK_ROOT}
 
-# Create models directory
-RUN mkdir -p models
+# Copy pre-trained models into the container
+COPY models ${LAMBDA_TASK_ROOT}/models
 
-# Set environment variables
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
+# Set Python path to include shared directory
+ENV PYTHONPATH="/var/task/shared:/var/task"
 
-# Expose port for potential API usage
-EXPOSE 8000
-
-# Run the application
-CMD ["python", "anomaly_detector.py"]
+# Set the handler
+CMD ["anomaly_detector.lambda_handler"]

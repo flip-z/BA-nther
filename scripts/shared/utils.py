@@ -93,18 +93,12 @@ def extract_time_features(timestamp_str: str) -> Dict[str, Any]:
         dt = pd.to_datetime(timestamp_str)
         return {
             'hour': dt.hour,
-            'hour_of_day': dt.hour,  # Explicit hour_of_day feature  
-            'day_of_week': dt.dayofweek,
-            'day_of_month': dt.day,
-            'month': dt.month
+            'day_of_week': dt.dayofweek
         }
     except:
         return {
             'hour': -1,
-            'hour_of_day': -1,  # Explicit hour_of_day feature
-            'day_of_week': -1,
-            'day_of_month': -1,
-            'month': -1
+            'day_of_week': -1
         }
 
 def get_categorical_features(df: pd.DataFrame, max_cardinality: int = 50) -> List[str]:

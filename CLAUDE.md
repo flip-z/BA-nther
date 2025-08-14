@@ -11,6 +11,7 @@ This is the **Panther Security Log Anomaly Detection** system - a three-stage pi
 1. **Data Collector** (`data_collector/`) - Fetches security logs via Panther GraphQL API
 2. **Model Trainer** (`model_trainer/`) - Trains Isolation Forest models on collected logs  
 3. **Anomaly Detector** (`anomaly_detector/`) - Detects anomalies in individual events
+4. **Feature Selection** (`shared/feature_selection.py`) - Optimized feature selection with temporal discrimination
 
 The system processes CloudTrail (AWS Config, AWS IAM) and VPC Flow logs, extracting temporal and categorical features for anomaly detection.
 
@@ -65,19 +66,19 @@ Each query requires:
 
 ## Key Architecture Components
 
-### Feature Engineering (`shared/utils.py`)
+### Feature Engineering (`shared/utils.py` + `shared/feature_selection.py`)
 - **Time Features**: Extracts hour, day_of_week, day_of_month, month from `p_event_time`
 - **Field Normalization**: Maps lowercase CloudTrail fields to camelCase model format
-- **Feature Selection**: Prioritizes categorical features with 2-50 cardinality, numerical with variance > 0.01
+- **Feature Selection**: Enhanced algorithm with coverage (60%+), cardinality (2-1000), entropy, and temporal bonuses
 
 ### Model Training Strategy
 - **Algorithm**: Isolation Forest with 10% contamination rate
-- **Feature Optimization**: Algorithmic selection based on coverage (70%+), cardinality (2-1000), and entropy
+- **Feature Optimization**: Enhanced selection targeting 10 features with coverage (60%+), temporal bonuses
 - **Preprocessing**: Label encoding for categoricals, StandardScaler for numericals
 - **Persistence**: Models, encoders, scalers, and metadata saved to `models/` directory
 
 ### Anomaly Detection Logic
-- **Threshold**: Default -0.3 (configurable via `--anomaly-threshold`)
+- **Threshold**: Default -0.2 (optimized for temporal anomaly detection)
 - **Binary Classification**: `is_anomaly = score < threshold`
 - **Explanations**: Score-based natural language aligned with classification
 - **Feature Analysis**: Z-score for numerical (>2 = high deviation), rarity score for categorical (>0.8 = rare)
@@ -97,14 +98,18 @@ Auto-detects log type based on:
 
 ```
 scripts/
-├── shared/utils.py           # Core feature engineering & utilities
-├── data_collector/           # Panther API integration
+├── shared/
+│   ├── utils.py             # Core feature engineering & utilities
+│   └── feature_selection.py # Enhanced feature selection algorithms
+├── data_collector/          # Panther API integration
 ├── model_trainer/           # ML training pipeline  
 ├── anomaly_detector/        # Real-time detection
 ├── config/                  # Configuration & credentials
 ├── data/                    # Collected JSON logs
 ├── models/                  # Trained models & metadata
-└── run_pipeline.sh          # Orchestration script
+├── run_pipeline.sh          # Orchestration script
+├── test_local_comprehensive.py   # Local testing suite
+└── test_api_comprehensive.py     # API testing suite
 ```
 
 ## Development Notes
@@ -115,7 +120,8 @@ scripts/
 - `is_business_hours` feature completely removed as redundant with temporal features
 
 ### Performance Optimizations
-- Feature coverage threshold (70%) eliminates sparse features
+- Feature coverage threshold (60%) eliminates sparse features while retaining useful patterns
+- Enhanced feature selection targets 10 features with temporal discrimination bonuses
 - Cardinality limits prevent high-dimensional categorical explosion  
 - Deduplication removes redundant temporal features (hour vs hour_of_day)
 - Skip data collection flag (`--skip-data-collection`) for development iteration

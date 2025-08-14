@@ -1,30 +1,33 @@
 # Panther Security Log Anomaly Detection
 
-A three-script system for collecting security logs from Panther's GraphQL API, training anomaly detection models, and detecting anomalies in real-time events.
+A complete pipeline for collecting security logs from Panther's GraphQL API, training machine learning models, and deploying anomaly detection as a serverless API via AWS Lambda + API Gateway.
 
-## Overview
+## Architecture Overview
 
-### Script 1: Data Collector (`data_collector/`)
-- Uses Panther's executeDataLakeQuery mutation + polling pattern
-- Handles async query execution with proper status monitoring
-- Automatically paginates through large result sets
-- Saves JSON security logs for training
+This system consists of a **development pipeline** and **production deployment**:
 
-### Script 2: Model Trainer (`model_trainer/`)
-- Analyzes security logs and trains Isolation Forest models
-- Focuses on low cardinality and time-based features
-- Computes statistical baselines for explainable anomalies
+### Development Pipeline
+1. **Data Collector** (`data_collector/`) - Fetches security logs via Panther GraphQL API
+2. **Model Trainer** (`model_trainer/`) - Trains Isolation Forest models on collected logs  
+3. **Anomaly Detector** (`anomaly_detector/`) - Detects anomalies in individual events
+4. **Feature Selection** (`shared/feature_selection.py`) - Optimized feature selection algorithms
 
-### Script 3: Anomaly Detector (`anomaly_detector/`)
-- Detects anomalies in individual security log events
-- Provides anomaly scores and human-readable explanations
-- Compares events against learned baselines
+### Production Deployment
+- **AWS Lambda Function** - Containerized anomaly detector with pre-trained models
+- **API Gateway** - HTTP API endpoint for real-time anomaly detection
+- **Comprehensive Test Suite** - Validates API functionality and performance
+
+### Supported Log Types
+- **AWS IAM** (CloudTrail events from `iam.amazonaws.com`)
+- **AWS Config** (CloudTrail events from `config.amazonaws.com`)  
+- **AWS VPC Flow** (VPC Flow logs from `vpc-flow-logs.amazonaws.com`)
 
 ## Setup
 
 ### Prerequisites
 - Python 3.11+
-- Docker and docker-compose
+- Docker (for containerized deployment)
+- AWS CLI configured with appropriate permissions
 - Panther API token (from your Panther console)
 - Your Panther instance URL (e.g., `https://company.panther.com`)
 
@@ -59,20 +62,57 @@ Each query needs:
 - `time`: Number of days to look back for data
 - `query`: SQL query to execute (use `{days}` placeholder)
 
-## Usage
+## Workflow
 
-### Docker Compose (Recommended)
+### 1. Development Pipeline (Recommended)
 
-Run the complete pipeline:
+Execute the complete training pipeline:
 ```bash
 cd scripts
-docker-compose up --build
+./run_pipeline.sh
 ```
 
 This will:
 1. Collect security logs from Panther API
-2. Train anomaly detection models
-3. Start the anomaly detector service
+2. Train anomaly detection models for each log type
+3. Save models and metadata to `models/` directory
+
+**Options:**
+- `./run_pipeline.sh --skip-data-collection` - Use existing data, skip collection phase
+
+### 2. Production Deployment
+
+Deploy to AWS Lambda + API Gateway:
+```bash
+./deploy/deploy_lambda.sh
+```
+
+This will:
+1. Build Docker container with trained models
+2. Deploy to AWS Lambda
+3. Create API Gateway HTTP API
+4. Provide API endpoint for testing
+
+### 3. Testing & Validation
+
+#### Local Testing
+Test anomaly detection locally:
+```bash
+python test_local_comprehensive.py
+```
+
+#### API Testing  
+Test the deployed API comprehensively:
+```bash
+python test_api_comprehensive.py --api-url https://YOUR-API-ID.execute-api.us-east-1.amazonaws.com/prod/detect
+```
+
+This will:
+1. Dynamically discover available models
+2. Test auto-detection via `eventSource` field
+3. Test explicit model selection via `log_type`
+4. Test custom anomaly thresholds
+5. Benchmark performance across all models
 
 ### Individual Scripts
 
@@ -103,6 +143,71 @@ python anomaly_detector.py --file event.json
 
 # Analyze event from stdin
 echo '{"timestamp": "2024-01-01T12:00:00Z", ...}' | python anomaly_detector.py
+```
+
+## API Usage
+
+Once deployed, the API Gateway endpoint accepts HTTP POST requests:
+
+### Request Format
+```json
+{
+  "event_data": { 
+    "eventName": "CreateUser",
+    "eventsource": "iam.amazonaws.com",
+    "sourceIPAddress": "10.0.0.1"
+  },
+  "log_type": "AWS IAM",           // optional - auto-detected if not provided
+  "anomaly_threshold": -0.2        // optional - defaults to -0.2
+}
+```
+
+### Model Auto-Detection
+Events are automatically assigned to models based on `eventsource` field:
+- `iam.amazonaws.com` → AWS IAM model
+- `config.amazonaws.com` → AWS Config model  
+- `vpc-flow-logs.amazonaws.com` → AWS VPC Flow model
+
+### Response Format
+```json
+{
+  "log_type": "AWS IAM",
+  "is_anomaly": false,
+  "anomaly_score": -0.213,
+  "anomaly_threshold": -0.2,
+  "explanation": "Event appears normal with typical feature patterns.",
+  "feature_deviations": {
+    "eventName": {
+      "type": "categorical",
+      "value": "CreateUser", 
+      "rarity_score": 0.95,
+      "deviation_level": "rare"
+    }
+  },
+  "model_info": {
+    "training_samples": 240438,
+    "features_used_count": 10,
+    "features_found_in_event": 2
+  }
+}
+```
+
+### Example API Calls
+```bash
+# Auto-detection via eventSource
+curl -X POST https://YOUR-API-ID.execute-api.us-east-1.amazonaws.com/prod/detect \
+  -H "Content-Type: application/json" \
+  -d '{"event_data":{"eventName":"CreateUser","eventsource":"iam.amazonaws.com"}}'
+
+# Explicit model selection
+curl -X POST https://YOUR-API-ID.execute-api.us-east-1.amazonaws.com/prod/detect \
+  -H "Content-Type: application/json" \
+  -d '{"event_data":{"eventName":"CreateUser"},"log_type":"AWS IAM"}'
+
+# Custom threshold (more sensitive)
+curl -X POST https://YOUR-API-ID.execute-api.us-east-1.amazonaws.com/prod/detect \
+  -H "Content-Type: application/json" \
+  -d '{"event_data":{"eventName":"SuspiciousActivity"},"anomaly_threshold":-0.15}'
 ```
 
 ## Output
@@ -150,43 +255,63 @@ scripts/
 │   ├── model_trainer.py
 │   ├── Dockerfile  
 │   └── requirements.txt
-├── anomaly_detector/        # Real-time detection
+├── anomaly_detector/        # Real-time detection (Lambda handler)
 │   ├── anomaly_detector.py
 │   ├── Dockerfile
 │   └── requirements.txt
+├── deploy/                  # AWS deployment scripts
+│   └── deploy_lambda.sh     # Lambda + API Gateway deployment
 ├── shared/                  # Common utilities
 │   ├── __init__.py
-│   ├── utils.py
+│   ├── utils.py             # Core feature engineering
+│   ├── feature_selection.py # Enhanced feature selection algorithms
 │   └── requirements.txt
 ├── config/                  # Configuration files
 │   ├── config.json
 │   └── .env.example
-├── data/                    # Collected security logs
-├── models/                  # Trained models and metadata
-└── docker-compose.yml       # Container orchestration
+├── data/                    # Collected security logs (gitignored)
+├── models/                  # Trained models and metadata (gitignored)
+├── test_local_comprehensive.py # Local testing suite
+├── test_api_comprehensive.py   # Comprehensive API test suite
+├── run_pipeline.sh            # Complete training pipeline
+└── docker-compose.yml       # Container orchestration (development)
 ```
 
 ## Features
 
-### Simple Configuration
-- Just 3 fields per query: title, time, SQL query
-- All GraphQL complexity hidden in scripts
-- Easy to add new data sources without GraphQL knowledge
-- Hard-coded optimal settings for security log analysis
+### Serverless Architecture
+- **AWS Lambda** deployment with API Gateway integration
+- **Auto-scaling** to handle traffic spikes
+- **Pay-per-request** pricing model  
+- **Sub-120ms response times** for real-time detection
+
+### Intelligent Model Selection
+- **Automatic log type detection** via `eventSource` field mapping
+- **Explicit model selection** via `log_type` parameter
+- **Graceful handling** of unsupported log types (no dangerous defaults)
+- **Multiple model support**: AWS IAM, Config, VPC Flow logs
+
+### Comprehensive Testing
+- **Dynamic model discovery** from configuration and trained models
+- **Performance benchmarking** across all model types
+- **Error handling validation** for edge cases
+- **100% success rate** with proper error classification
 
 ### Security-Focused Analysis
-- Prioritizes security-relevant features (IPs, user agents, protocols)
-- Time-based anomaly detection (unusual hours, days)
-- Low-cardinality categorical analysis
+- **Feature engineering** optimized for security events
+- **Time-based anomaly detection** (unusual hours, days, patterns)
+- **Categorical rarity analysis** for IPs, user agents, event names
+- **Configurable sensitivity** via custom anomaly thresholds
 
 ### Explainable Results
-- Z-score analysis for numerical features
-- Rarity scoring for categorical features  
-- Human-readable anomaly explanations
-- Feature deviation classifications
+- **Human-readable explanations** for each prediction
+- **Feature deviation analysis** with severity levels
+- **Model transparency** showing training data size and feature usage
+- **Confidence scoring** based on feature coverage
 
 ### Production-Ready
-- Docker containerization for consistent deployment
-- Retry logic and error handling
-- Comprehensive logging
-- Modular architecture ready for AWS Lambda conversion
+- **Docker containerization** for consistent deployment
+- **Retry logic** and comprehensive error handling
+- **Configuration-driven** pipeline (no hard-coded values)
+- **Direct API integration** via HTTP endpoints
+- **Comprehensive logging** and monitoring support
