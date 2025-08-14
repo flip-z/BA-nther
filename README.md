@@ -1,24 +1,36 @@
 # Panther Security Log Anomaly Detection
 
-A three-script system for collecting security logs from Panther's GraphQL API, training anomaly detection models, and detecting anomalies in real-time events.
+A complete pipeline for collecting security logs from Panther's GraphQL API, training machine learning models, and deploying anomaly detection as a serverless API via AWS Lambda + API Gateway.
 
 ## Overview
 
-### Script 1: Data Collector (`data_collector/`)
+### Core Pipeline
+
+#### Script 1: Data Collector (`data_collector/`)
 - Uses Panther's executeDataLakeQuery mutation + polling pattern
 - Handles async query execution with proper status monitoring
 - Automatically paginates through large result sets
 - Saves JSON security logs for training
 
-### Script 2: Model Trainer (`model_trainer/`)
+#### Script 2: Model Trainer (`model_trainer/`)
 - Analyzes security logs and trains Isolation Forest models
-- Focuses on low cardinality and time-based features
+- Uses enhanced feature selection with temporal discrimination
 - Computes statistical baselines for explainable anomalies
 
-### Script 3: Anomaly Detector (`anomaly_detector/`)
+#### Script 3: Anomaly Detector (`anomaly_detector/`)
 - Detects anomalies in individual security log events
 - Provides anomaly scores and human-readable explanations
 - Compares events against learned baselines
+
+#### Script 4: Feature Selection (`shared/feature_selection.py`)
+- Optimized feature selection algorithms with coverage and entropy analysis
+- Temporal bonuses for hour/day_of_week features
+- Enhanced model performance with 10-feature selection
+
+### Production Deployment
+- **AWS Lambda Function** - Containerized anomaly detector with pre-trained models
+- **API Gateway** - HTTP API endpoint for real-time anomaly detection  
+- **Comprehensive Testing** - Local and API test suites for validation
 
 ## Setup
 
@@ -69,7 +81,40 @@ cd scripts
 ./run_pipeline.sh
 ```
 
-### Docker Compose
+Options:
+- `./run_pipeline.sh --skip-data-collection` - Use existing data, skip collection phase
+
+### Production Deployment
+
+Deploy to AWS Lambda + API Gateway:
+```bash
+cd scripts
+./deploy/deploy_lambda.sh
+```
+
+This will:
+1. Build Docker container with trained models
+2. Deploy to AWS Lambda
+3. Create API Gateway HTTP API
+4. Provide API endpoint for testing
+
+### Testing & Validation
+
+#### Local Testing
+Test anomaly detection locally:
+```bash
+cd scripts
+python test_local_comprehensive.py
+```
+
+#### API Testing  
+Test the deployed API comprehensively:
+```bash
+cd scripts
+python test_api_comprehensive.py --api-url https://YOUR-API-ID.execute-api.us-east-1.amazonaws.com/prod/detect
+```
+
+### Docker Compose (Development)
 
 ```bash
 cd scripts
@@ -103,8 +148,8 @@ python anomaly_detector.py --file event.json
 # Analyze event from stdin
 echo '{"eventName": "test", "eventSource": "iam.amazonaws.com"}' | python anomaly_detector.py
 
-# Set custom anomaly threshold
-python anomaly_detector.py --file event.json --anomaly-threshold -0.5
+# Set custom anomaly threshold (default is -0.2)
+python anomaly_detector.py --file event.json --anomaly-threshold -0.15
 ```
 
 ## Output
@@ -134,12 +179,13 @@ Simple configuration with three fields per query:
 - `time`: Days to look back for training data  
 - `query`: SQL query with `{time}d` placeholder for temporal filtering
 
-### Model Parameters (Hard-coded)
-- Isolation Forest contamination rate: 0.1 (10% anomalies expected)
-- Query polling: 5-minute timeout with 5-second intervals
-- Result pagination: Up to 10 pages per query
-- Feature selection: Low cardinality + time-based features prioritized
-- Statistical thresholds: Z-score > 2 for numerical, rarity > 0.8 for categorical
+### Model Parameters
+- **Algorithm**: Isolation Forest with 10% contamination rate
+- **Features**: Enhanced selection targeting 10 features with 60% coverage threshold
+- **Threshold**: Default -0.2 (optimized for temporal anomaly detection)  
+- **Query polling**: 5-minute timeout with 5-second intervals
+- **Result pagination**: Up to 10 pages per query
+- **Statistical thresholds**: Z-score > 2 for numerical, rarity > 0.8 for categorical
 
 ## File Structure
 ```
@@ -152,43 +198,68 @@ scripts/
 │   ├── model_trainer.py
 │   ├── Dockerfile  
 │   └── requirements.txt
-├── anomaly_detector/        # Real-time detection
+├── anomaly_detector/        # Real-time detection (Lambda handler)
 │   ├── anomaly_detector.py
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── shared/                  # Common utilities
 │   ├── __init__.py
-│   ├── utils.py
+│   ├── utils.py             # Core feature engineering
+│   ├── feature_selection.py # Enhanced feature selection algorithms
 │   └── requirements.txt
+├── deploy/                  # AWS deployment scripts
+│   └── deploy_lambda.sh     # Lambda + API Gateway deployment
 ├── config/                  # Configuration files
 │   ├── config.json
 │   └── .env.example
 ├── data/                    # Collected security logs (gitignored)
 ├── models/                  # Trained models and metadata (gitignored)
-└── docker-compose.yml       # Container orchestration
+├── test_local_comprehensive.py # Local testing suite
+├── test_api_comprehensive.py   # Comprehensive API test suite
+├── run_pipeline.sh          # Complete training pipeline
+└── docker-compose.yml       # Container orchestration (development)
 ```
 
 ## Features
+
+### Serverless Architecture
+- **AWS Lambda** deployment with API Gateway integration
+- **Auto-scaling** to handle traffic spikes
+- **Pay-per-request** pricing model  
+- **Sub-120ms response times** for real-time detection
+
+### Enhanced Machine Learning
+- **Isolation Forest** with 10% contamination rate
+- **10-feature selection** with temporal discrimination bonuses
+- **Optimized thresholds** (-0.2 default) for temporal anomaly detection
+- **Multiple model support**: AWS IAM, Config, VPC Flow logs
 
 ### Simple Configuration
 - Just 3 fields per query: title, time, SQL query
 - All GraphQL complexity hidden in scripts
 - Easy to add new data sources without GraphQL knowledge
-- Hard-coded optimal settings for security log analysis
+- Configuration-driven pipeline (no hard-coded values)
 
 ### Security-Focused Analysis
-- Prioritizes security-relevant features (IPs, user agents, protocols)
-- Time-based anomaly detection (unusual hours, days)
-- Low-cardinality categorical analysis
+- **Feature engineering** optimized for security events
+- **Time-based anomaly detection** (unusual hours, days, patterns)
+- **Categorical rarity analysis** for IPs, user agents, event names
+- **Configurable sensitivity** via custom anomaly thresholds
 
 ### Explainable Results
-- Z-score analysis for numerical features
-- Rarity scoring for categorical features  
-- Human-readable anomaly explanations
-- Feature deviation classifications
+- **Human-readable explanations** for each prediction
+- **Feature deviation analysis** with severity levels
+- **Model transparency** showing training data size and feature usage
+- **Z-score analysis** for numerical, rarity scoring for categorical
+
+### Comprehensive Testing
+- **Dynamic model discovery** from configuration and trained models
+- **Performance benchmarking** across all model types
+- **Error handling validation** for edge cases
+- **Local and API test suites** for complete validation
 
 ### Production-Ready
-- Docker containerization for consistent deployment
-- Retry logic and error handling
-- Comprehensive logging
-- Modular architecture ready for AWS Lambda conversion
+- **Docker containerization** for consistent deployment
+- **Retry logic** and comprehensive error handling
+- **Direct API integration** via HTTP endpoints
+- **Comprehensive logging** and monitoring support
